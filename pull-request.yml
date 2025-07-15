@@ -1,0 +1,384 @@
+name: Pull Request Workflow
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed, ready_for_review]
+    paths:
+      - "apps/web/**"
+      - "packages/db/**"
+
+env:
+  PRISMA_POSTGRES_MANAGEMENT: ${{ secrets.PRISMA_POSTGRES_MANAGEMENT }}
+  PRISMA_PROJECT: ${{ secrets.PRISMA_PROJECT }}
+  PRISMA_WORKSPACE: ${{ secrets.PRISMA_WORKSPACE }}
+  VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+  DB_EXISTING: false
+  # Sanitize database name once at workflow level
+  DB_NAME: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.ref }}
+
+# Prevent concurrent runs of the same PR
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy-preview:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    # This is required to allow the workflow to create a comment on the PR
+    permissions: write-all
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install Dependencies
+        run: |
+          # Set DISABLE_DB_MIGRATION to prevent web app's postinstall script from running migrations
+          export DISABLE_DB_MIGRATION=true
+          echo "DISABLE_DB_MIGRATION=true" >> $GITHUB_ENV
+
+          # Install dependencies
+          pnpm install
+
+      - name: Validate Environment Variables
+        run: |
+          if [ -z "${{ env.PRISMA_POSTGRES_MANAGEMENT }}" ]; then
+            echo "Error: PRISMA_POSTGRES_MANAGEMENT secret is not set"
+            exit 1
+          fi
+          if [ -z "${{ env.PRISMA_PROJECT }}" ]; then
+            echo "Error: PRISMA_PROJECT secret is not set"
+            exit 1
+          fi
+          if [ -z "${{ env.PRISMA_WORKSPACE }}" ]; then
+            echo "Error: PRISMA_WORKSPACE secret is not set"
+            exit 1
+          fi
+          if [ -z "${{ env.VERCEL_TOKEN }}" ]; then
+            echo "Error: VERCEL_TOKEN secret is not set"
+            exit 1
+          fi
+          if [ -z "${{ env.VERCEL_ORG_ID }}" ]; then
+            echo "Error: VERCEL_ORG_ID secret is not set"
+            exit 1
+          fi
+          if [ -z "${{ env.VERCEL_PROJECT_ID }}" ]; then
+            echo "Error: VERCEL_PROJECT_ID secret is not set"
+            exit 1
+          fi
+
+      - name: Sanitize Database Name
+        run: |
+          # Sanitize the database name to match Prisma's requirements
+          # Replace hyphens with underscores and ensure it starts with a letter
+          DB_NAME="$(echo "${{ env.DB_NAME }}" | tr '/' '_' | tr '-' '_' | tr '[:upper:]' '[:lower:]')"
+          echo "DB_NAME=$DB_NAME" >> $GITHUB_ENV
+
+      - name: Check If Database Exists
+        id: check-db
+        run: |
+          # Get all databases and debug the response
+          echo "Fetching all databases..."
+          RESPONSE=$(curl -s -X GET \
+            -H "Authorization: Bearer ${{ env.PRISMA_POSTGRES_MANAGEMENT }}" \
+            -H "Content-Type: application/json" \
+            "https://api.prisma.io/v1/projects/${{ env.PRISMA_PROJECT }}/databases")
+
+          echo "Looking for database with name: ${{ env.DB_NAME }}"
+
+          # Extract database ID using jq to properly parse JSON
+          DB_EXISTS=$(echo "$RESPONSE" | jq -r ".data[] | select(.name == \"${{ env.DB_NAME }}\") | .id")
+
+          echo "Found database ID: $DB_EXISTS"
+
+          echo "$RESPONSE"
+
+          if [ ! -z "$DB_EXISTS" ] && [ "$DB_EXISTS" != "null" ]; then
+            echo "Database ${{ env.DB_NAME }} exists with ID: $DB_EXISTS."
+            
+            # Create a new connection string for the database
+            echo "Creating new connection string..."
+            CONNECTION_RESPONSE=$(curl -s -X POST \
+              -H "Authorization: Bearer ${{ env.PRISMA_POSTGRES_MANAGEMENT }}" \
+              -H "Content-Type: application/json" \
+              -d '{"name":"read_write_key"}' \
+              "https://api.prisma.io/v1/projects/${{ env.PRISMA_PROJECT }}/databases/$DB_EXISTS/connections")
+            
+            echo "Connection response: $CONNECTION_RESPONSE"
+            CONNECTION_STRING=$(echo "$CONNECTION_RESPONSE" | jq -r '.connectionString')
+            echo "CONNECTION_STRING: $CONNECTION_STRING"
+            echo "connection-string=$CONNECTION_STRING" >> $GITHUB_OUTPUT
+            echo "DB_EXISTING=true" >> $GITHUB_ENV
+          else
+            echo "No existing database found with name ${{ env.DB_NAME }}"
+            echo "DB_EXISTING=false" >> $GITHUB_ENV
+          fi
+
+      - name: Create Feature Branch Database
+        id: create-db
+        if: env.DB_EXISTING != 'true'
+        run: |
+          # Create the database with retry logic
+          for i in {1..3}; do
+            echo "Attempt $i to create database..."
+            # Run curl with verbose output to a separate file
+            RESPONSE=$(curl -s -X POST \
+              -H "Authorization: Bearer ${{ env.PRISMA_POSTGRES_MANAGEMENT }}" \
+              -H "Content-Type: application/json" \
+              -H "Accept: application/json" \
+              -H "User-Agent: GitHub Actions" \
+              -d "{\"name\": \"${{ env.DB_NAME }}\", \"region\": \"us-east-1\"}" \
+              "https://api.prisma.io/v1/projects/${{ env.PRISMA_PROJECT }}/databases")
+            
+            # Check if response contains an id (success case)
+            if echo "$RESPONSE" | grep -q '"id":'; then
+              echo "Database created successfully"
+              CONNECTION_STRING=$(echo "$RESPONSE" | grep -o '"connectionString":"[^"]*"' | sed 's/"connectionString":"//;s/"//')
+              echo "CONNECTION_STRING: $CONNECTION_STRING"
+              echo "connection-string=$CONNECTION_STRING" >> $GITHUB_OUTPUT
+              break
+            fi
+            
+            # Check for API error
+            if echo "$RESPONSE" | grep -q '"error":'; then
+              ERROR_MSG=$(echo "$RESPONSE" | grep -o '"message":"[^"]*"' | sed 's/"message":"//;s/"//' || echo "Unknown error")
+              echo "API Error: $ERROR_MSG"
+              if [ $i -eq 3 ]; then
+                echo "Failed to create database after 3 attempts"
+                exit 1
+              fi
+              echo "Retrying in 5 seconds..."
+              sleep 5
+              continue
+            fi
+          done
+
+      - name: Setup Database Schema
+        run: |
+          echo "1. Getting connection string"
+          if [ "${{ env.DB_EXISTING }}" = "true" ]; then
+            CONNECTION_STRING="${{ steps.check-db.outputs.connection-string }}"
+            echo "Using existing database connection string"
+          else
+            CONNECTION_STRING="${{ steps.create-db.outputs.connection-string }}"
+            echo "Using newly created database connection string"
+          fi
+
+          echo "2. Install dependencies in the db package"
+          cd packages/db
+          pnpm install
+
+          echo "3. Set the DATABASE_URL"
+          export DATABASE_URL="$CONNECTION_STRING"
+          export PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK=true
+          echo "PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK=true" >> $GITHUB_ENV
+
+          echo "4. Reset database schema for existing databases"
+          if [ "${{ env.DB_EXISTING }}" = "true" ]; then
+            echo "Resetting schema for existing database..."
+            pnpm prisma db push --schema=src/prisma/schema.prisma --force-reset
+          else
+            echo "Pushing schema to new database..."
+            pnpm prisma db push --schema=src/prisma/schema.prisma
+          fi
+
+          echo "5. Generate Prisma Client"
+          if ! pnpm prisma generate --no-engine --schema=src/prisma/schema.prisma; then
+            echo "Failed to generate Prisma Client"
+            exit 1
+          fi
+
+      - name: Seed Database
+        run: |
+          cd packages/db
+          # Use connection string from database creation
+          if [ "${{ env.DB_EXISTING }}" = "true" ]; then
+            CONNECTION_STRING="${{ steps.check-db.outputs.connection-string }}"
+          else
+            CONNECTION_STRING="${{ steps.create-db.outputs.connection-string }}"
+          fi
+
+          # Set the DATABASE_URL environment variable for the seed script
+          export DATABASE_URL="$CONNECTION_STRING"
+
+          # Run the seed script with retry logic
+          echo "Starting database seeding..."
+          for i in {1..3}; do
+            if NODE_ENV=production pnpm node scripts/seed/testing.js; then
+              echo "Database seeding completed successfully"
+              break
+            fi
+            if [ $i -eq 3 ]; then
+              echo "Failed to seed database after 3 attempts"
+              exit 1
+            fi
+            echo "Retrying database seeding... (Attempt $i)"
+            sleep 5
+          done
+
+      - name: Install Vercel CLI
+        run: pnpm install -g vercel
+
+      - name: Deploy to Vercel
+        id: deploy
+        run: |
+          echo "Deploying to Vercel..."
+          if [ "${{ env.DB_EXISTING }}" = "true" ]; then
+            CONNECTION_STRING="${{ steps.check-db.outputs.connection-string }}"
+          else
+            CONNECTION_STRING="${{ steps.create-db.outputs.connection-string }}"
+          fi
+
+          # Check if token exists
+          if [ -z "${{ secrets.VERCEL_TOKEN }}" ]; then
+            echo "Error: VERCEL_TOKEN secret is not set"
+            exit 1
+          fi
+
+          if [ -z "${{ secrets.VERCEL_ORG_ID }}" ]; then
+            echo "Error: VERCEL_ORG_ID secret is not set"
+            exit 1
+          fi
+
+          # Deploy to Vercel preview environment and capture the preview URL
+          VERCEL_OUTPUT=$(vercel deploy \
+            --target=preview \
+            --token=${{ secrets.VERCEL_TOKEN }} \
+            --scope=${{ secrets.VERCEL_ORG_ID }} \
+            --build-env DB_READY=true \
+            --build-env RUN_ONLY_GENERATE=true \
+            --build-env AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}" \
+            --build-env AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
+            --build-env BETTER_AUTH_SECRET="${{ secrets.BETTER_AUTH_SECRET }}" \
+            --build-env DATABASE_URL="$CONNECTION_STRING" \
+            --build-env EMAIL_FROM="${{ secrets.EMAIL_FROM }}" \
+            --build-env QUICKBOOKS_CLIENT_ID="${{ secrets.QUICKBOOKS_CLIENT_ID }}" \
+            --build-env QUICKBOOKS_CLIENT_SECRET="${{ secrets.QUICKBOOKS_CLIENT_SECRET }}" \
+            --build-env RESEND_API_KEY="${{ secrets.RESEND_API_KEY }}" \
+            --env AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}" \
+            --env AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
+            --env BETTER_AUTH_SECRET="${{ secrets.BETTER_AUTH_SECRET }}" \
+            --env DATABASE_URL="$CONNECTION_STRING" \
+            --env DISABLE_DB_MIGRATION=true \
+            --env EMAIL_FROM="${{ secrets.EMAIL_FROM }}" \
+            --env QUICKBOOKS_CLIENT_ID="${{ secrets.QUICKBOOKS_CLIENT_ID }}" \
+            --env QUICKBOOKS_CLIENT_SECRET="${{ secrets.QUICKBOOKS_CLIENT_SECRET }}" \
+            --env RESEND_API_KEY="${{ secrets.RESEND_API_KEY }}")
+
+          PREVIEW_URL=$(echo "$VERCEL_OUTPUT" | grep -o 'https://.*')
+
+          # Validate preview URL
+          if [ -z "$PREVIEW_URL" ]; then
+            echo "Failed to get preview URL"
+            exit 1
+          fi
+
+          echo "preview-url=$PREVIEW_URL" >> $GITHUB_OUTPUT
+
+          # Wait for deployment to be ready
+          echo "Waiting for deployment to be ready..."
+          for i in {1..3}; do
+            if curl -s -f "$PREVIEW_URL" > /dev/null; then
+              echo "Deployment is ready!"
+              sleep 10
+              break
+            fi
+
+            if [ $i -eq 3 ]; then
+              echo "Deployment failed to become ready after 3 attempts"
+              exit 1
+            fi
+
+            echo "Waiting for deployment... (Attempt $i)"
+            sleep 10
+          done
+
+      - name: Comment PR
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: 'masterboard',
+              body: `🚀 Preview deployed to: ${{ steps.deploy.outputs.preview-url }}\n\nDatabase: ${{ env.DB_NAME }}\n\nAdmin Login:\nEmail: admin@truenorthhydraulics.com`
+            })
+
+  cleanup:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Sanitize Database Name
+        run: |
+          # Sanitize the database name
+          DB_NAME="$(echo "${{ env.DB_NAME }}" | tr '/' '_' | tr '-' '_' | tr '[:upper:]' '[:lower:]')"
+          echo "DB_NAME=$DB_NAME" >> $GITHUB_ENV
+
+      - name: Delete Feature Branch Database
+        run: |
+          # Get all databases and debug the response
+          echo "Fetching all databases..."
+          RESPONSE=$(curl -s -X GET \
+            -H "Authorization: Bearer ${{ env.PRISMA_POSTGRES_MANAGEMENT }}" \
+            -H "Content-Type: application/json" \
+            "https://api.prisma.io/v1/projects/${{ env.PRISMA_PROJECT }}/databases")
+
+          echo "Looking for database with name: ${{ env.DB_NAME }}"
+
+          # Extract database ID using jq to properly parse JSON
+          DB_EXISTS=$(echo "$RESPONSE" | jq -r ".data[] | select(.name == \"${{ env.DB_NAME }}\") | .id")
+
+          echo "Found database ID: $DB_EXISTS"
+
+          if [ ! -z "$DB_EXISTS" ] && [ "$DB_EXISTS" != "null" ]; then
+            echo "Database ${{ env.DB_NAME }} exists with ID: $DB_EXISTS. Deleting..."
+            DELETE_RESPONSE=$(curl -s -X DELETE \
+              -H "Authorization: Bearer ${{ env.PRISMA_POSTGRES_MANAGEMENT }}" \
+              -H "Content-Type: application/json" \
+              "https://api.prisma.io/v1/projects/${{ env.PRISMA_PROJECT }}/databases/$DB_EXISTS")
+            
+            echo "Delete API Response:"
+            echo "$DELETE_RESPONSE"
+            
+            if echo "$DELETE_RESPONSE" | grep -q '"error":'; then
+              ERROR_MSG=$(echo "$DELETE_RESPONSE" | grep -o '"message":"[^"]*"' | sed 's/"message":"//;s/"//' || echo "Unknown error")
+              echo "Failed to delete database: $ERROR_MSG"
+              exit 1
+            fi
+            
+            echo "Database deletion initiated. Waiting for cleanup..."
+            sleep 5
+          else
+            echo "No existing database found with name ${{ env.DB_NAME }}"
+          fi
