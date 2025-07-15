@@ -119,7 +119,7 @@ jobs:
               "https://api.prisma.io/v1/databases/$DB_EXISTS/connections")
             
             echo "Connection response: $CONNECTION_RESPONSE"
-            CONNECTION_STRING=$(echo "$CONNECTION_RESPONSE" | jq -r '.connectionString')
+            CONNECTION_STRING=$(echo "$CONNECTION_RESPONSE" | jq -r '.data.connectionString')
             echo "CONNECTION_STRING: $CONNECTION_STRING"
             echo "connection-string=$CONNECTION_STRING" >> $GITHUB_OUTPUT
             echo "DB_EXISTING=true" >> $GITHUB_ENV
