@@ -31,12 +31,30 @@ This workflow provides automated preview environment management for applications
 
 ## About MasterBoard
 
-[MasterBoard](https://masterboardapp.com) is a modern business management platform that helps companies:
+[MasterBoard](https://masterboardapp.com) is a comprehensive business management platform specifically designed for the hydraulics repair industry. Originally built for True North Hydraulics, MasterBoard helps hydraulics repair companies streamline their entire operation:
 
-- Track key performance indicators and metrics
-- Manage customer relationships and sales pipelines
-- Automate workflows and business processes
-- Generate insights through advanced analytics and reporting
+### Core Business Management
+
+- **Work Order Management**: Track hydraulic repair jobs from intake to completion
+- **Equipment & Inventory Tracking**: Manage hydraulic components, seals, pumps, and parts inventory
+- **Customer Relationship Management**: Maintain detailed customer profiles and service history
+- **QuickBooks Integration**: Seamless financial management and accounting synchronization
+- **Invoicing & Billing**: Automated billing for hydraulic repair services and parts
+
+### Operational Excellence
+
+- **Technician Scheduling**: Optimize field service routing and job assignments
+- **Mobile Workforce Management**: Field technicians can update job status and capture documentation
+- **Equipment Maintenance Tracking**: Preventive maintenance scheduling for customer hydraulic systems
+- **Service History & Documentation**: Complete repair records and equipment service logs
+- **Parts Procurement**: Automated ordering and supplier management for hydraulic components
+
+### Analytics & Reporting
+
+- **Business Performance Dashboards**: Track revenue, job completion rates, and technician productivity
+- **Equipment Performance Analytics**: Monitor hydraulic system reliability and maintenance trends
+- **Customer Insights**: Identify high-value customers and service opportunities
+- **Operational Metrics**: Labor efficiency, parts utilization, and profit margin analysis
 
 This workflow was extracted from MasterBoard's development infrastructure to help other teams implement similar preview environment automation.
 
