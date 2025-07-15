@@ -1,4 +1,4 @@
-# prisma-postgres
+# GitHub Actions Workflow for Prisma Postgres
 
 **Open-source GitHub Actions workflow for automated Prisma Postgres preview environments**
 
