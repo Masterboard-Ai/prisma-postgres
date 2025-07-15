@@ -116,7 +116,7 @@ jobs:
               -H "Authorization: Bearer ${{ env.PRISMA_POSTGRES_MANAGEMENT }}" \
               -H "Content-Type: application/json" \
               -d '{"name":"read_write_key"}' \
-              "https://api.prisma.io/v1/projects/${{ env.PRISMA_PROJECT }}/databases/$DB_EXISTS/connections")
+              "https://api.prisma.io/v1/databases/$DB_EXISTS/connections")
             
             echo "Connection response: $CONNECTION_RESPONSE"
             CONNECTION_STRING=$(echo "$CONNECTION_RESPONSE" | jq -r '.connectionString')
@@ -366,7 +366,7 @@ jobs:
             DELETE_RESPONSE=$(curl -s -X DELETE \
               -H "Authorization: Bearer ${{ env.PRISMA_POSTGRES_MANAGEMENT }}" \
               -H "Content-Type: application/json" \
-              "https://api.prisma.io/v1/projects/${{ env.PRISMA_PROJECT }}/databases/$DB_EXISTS")
+              "https://api.prisma.io/v1/databases/$DB_EXISTS")
             
             echo "Delete API Response:"
             echo "$DELETE_RESPONSE"

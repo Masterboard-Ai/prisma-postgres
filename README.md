@@ -1,5 +1,7 @@
 # GitHub Actions Workflow for Prisma Postgres
 
+[Prisma Postgres v1 API documentation](https://api.prisma.io/v1/swagger-editor)
+
 **Open-source GitHub Actions workflow for automated Prisma Postgres preview environments**
 
 This repository contains a reusable GitHub Actions workflow that automates the creation and management of feature branch databases using Prisma Postgres. Originally developed for [MasterBoard](https://masterboardapp.com) — a comprehensive business management platform that helps companies streamline their operations, track performance, and make data-driven decisions.
