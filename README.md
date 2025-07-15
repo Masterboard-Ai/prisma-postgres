@@ -2,7 +2,7 @@
 
 **Open-source GitHub Actions workflow for automated Prisma Postgres preview environments**
 
-This repository contains a reusable GitHub Actions workflow that automates the creation and management of feature branch databases using Prisma Postgres. Originally developed for [MasterBoard](https://masterboardapp.com) - a comprehensive business management platform that helps companies streamline their operations, track performance, and make data-driven decisions.
+This repository contains a reusable GitHub Actions workflow that automates the creation and management of feature branch databases using Prisma Postgres. Originally developed for [MasterBoard](https://masterboardapp.com) — a comprehensive business management platform that helps companies streamline their operations, track performance, and make data-driven decisions.
 
 ## What it does
 
@@ -31,7 +31,7 @@ This workflow provides automated preview environment management for applications
 
 ## About MasterBoard
 
-[MasterBoard](https://masterboardapp.com) is a comprehensive business management platform specifically designed for the hydraulics repair industry. Originally built for True North Hydraulics, MasterBoard helps hydraulics repair companies streamline their entire operation:
+[MasterBoard](https://masterboardapp.com) is a comprehensive business management platform specifically designed for the hydraulics repair industry. MasterBoard helps hydraulics repair companies streamline their entire operation:
 
 ### Core Business Management
 
